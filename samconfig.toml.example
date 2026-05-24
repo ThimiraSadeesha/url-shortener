@@ -6,4 +6,4 @@ stack_name = "url-shortener"
 resolve_s3 = true
 capabilities = "CAPABILITY_IAM"
 region = "ap-south-1"
-parameter_overrides = "ShortUrlBase=https://REPLACE_AFTER_DEPLOY"
+parameter_overrides = "HttpApiId=dsqeedu5n5 HttpApiStage=prod ShortUrlBase=https://dsqeedu5n5.execute-api.ap-south-1.amazonaws.com/prod"

@@ -16,6 +16,10 @@ env:
   AWS_REGION: ap-south-1
   GO_VERSION: "1.23"
   NODE_VERSION: "22"
+  # url-shortener-api · stage prod
+  API_BASE_URL: https://dsqeedu5n5.execute-api.ap-south-1.amazonaws.com/prod
+  HTTP_API_ID: dsqeedu5n5
+  HTTP_API_STAGE: prod
 
 jobs:
   build-and-test:
@@ -46,7 +50,7 @@ jobs:
 
       - name: Build web app
         env:
-          NEXT_PUBLIC_API_URL: https://placeholder.example.com
+          NEXT_PUBLIC_API_URL: ${{ env.API_BASE_URL }}
         run: npm run build
 
   deploy:
@@ -73,6 +77,9 @@ jobs:
 
       - uses: aws-actions/setup-sam@v2
 
+      - name: Enable API Gateway CORS (browser UI)
+        run: bash scripts/enable-api-cors.sh
+
       - name: SAM build
         run: sam build
 
@@ -86,27 +93,15 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM \
-            --parameter-overrides "ShortUrlBase=https://pending"
+            --parameter-overrides \
+              "HttpApiId=${{ env.HTTP_API_ID }} HttpApiStage=${{ env.HTTP_API_STAGE }} ShortUrlBase=${{ env.API_BASE_URL }}"
 
-          API_URL=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK" \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
-            --output text)
-
-          sam deploy \
-            --stack-name "$STACK" \
-            --resolve-s3 \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides "ShortUrlBase=${API_URL}"
-
-          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "api_url=${{ env.API_BASE_URL }}" >> "$GITHUB_OUTPUT"
           echo "stack_name=$STACK" >> "$GITHUB_OUTPUT"
 
       - name: Build static web for deploy
         env:
-          NEXT_PUBLIC_API_URL: ${{ steps.deploy.outputs.api_url }}
+          NEXT_PUBLIC_API_URL: ${{ env.API_BASE_URL }}
         run: |
           npm ci
           npm run build
@@ -136,5 +131,5 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue" \
             --output text)
           echo "### Deployed preview" >> "$GITHUB_STEP_SUMMARY"
-          echo "- API: ${{ steps.deploy.outputs.api_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: ${{ env.API_BASE_URL }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Web: ${WEB_URL}" >> "$GITHUB_STEP_SUMMARY"

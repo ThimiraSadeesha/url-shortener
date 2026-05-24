@@ -11,6 +11,7 @@ concurrency:
 env:
   GO_VERSION: "1.23"
   NODE_VERSION: "22"
+  API_BASE_URL: https://dsqeedu5n5.execute-api.ap-south-1.amazonaws.com/prod
 
 jobs:
   build-and-test:
@@ -41,5 +42,5 @@ jobs:
 
       - name: Build web app
         env:
-          NEXT_PUBLIC_API_URL: https://placeholder.example.com
+          NEXT_PUBLIC_API_URL: ${{ env.API_BASE_URL }}
         run: npm run build

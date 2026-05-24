@@ -1,11 +1,20 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: URL shortener — API (Lambda + DynamoDB) and static web (S3 + CloudFront)
+Description: URL shortener — Lambdas on existing API Gateway, DynamoDB, static web (S3 + CloudFront)
 
 Parameters:
+  HttpApiId:
+    Type: String
+    Default: dsqeedu5n5
+    Description: Existing HTTP API Gateway ID (url-shortener-api)
+  HttpApiStage:
+    Type: String
+    Default: prod
+    Description: API stage name
   ShortUrlBase:
     Type: String
-    Description: Public base URL for short links (no trailing slash). Set after first deploy if using a custom domain.
+    Default: https://dsqeedu5n5.execute-api.ap-south-1.amazonaws.com/prod
+    Description: Public base URL for short links (no trailing slash)
 
 Globals:
   Function:
@@ -35,19 +44,6 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  HttpApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      CorsConfiguration:
-        AllowOrigins:
-          - "*"
-        AllowMethods:
-          - GET
-          - POST
-          - OPTIONS
-        AllowHeaders:
-          - Content-Type
-
   CreateFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -65,8 +61,9 @@ Resources:
         CreateApi:
           Type: HttpApi
           Properties:
-            ApiId: !Ref HttpApi
-            Path: /api/shorten
+            ApiId: !Ref HttpApiId
+            StageName: !Ref HttpApiStage
+            Path: /create
             Method: POST
 
   RedirectFunction:
@@ -83,7 +80,8 @@ Resources:
         RedirectApi:
           Type: HttpApi
           Properties:
-            ApiId: !Ref HttpApi
+            ApiId: !Ref HttpApiId
+            StageName: !Ref HttpApiStage
             Path: /{code}
             Method: GET
 
@@ -153,8 +151,8 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway HTTP API endpoint
-    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Description: Existing API Gateway invoke URL (prod stage)
+    Value: !Sub "https://${HttpApiId}.execute-api.${AWS::Region}.amazonaws.com/${HttpApiStage}"
   WebUrl:
     Description: CloudFront URL for the web UI
     Value: !Sub "https://${WebDistribution.DomainName}"
