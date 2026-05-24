@@ -1,0 +1,140 @@
+name: PR to main — build, test, deploy
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-main-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  GO_VERSION: "1.23"
+  NODE_VERSION: "22"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint web app
+        run: npm run lint
+
+      - name: Build Go Lambdas
+        run: |
+          go build -o /dev/null ./functions/create/
+          go build -o /dev/null ./functions/redirect/
+
+      - name: Build web app
+        env:
+          NEXT_PUBLIC_API_URL: https://placeholder.example.com
+        run: npm run build
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/setup-sam@v2
+
+      - name: SAM build
+        run: sam build
+
+      - name: SAM deploy
+        id: deploy
+        run: |
+          STACK="url-shortener-pr-${{ github.event.pull_request.number }}"
+          sam deploy \
+            --stack-name "$STACK" \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides "ShortUrlBase=https://pending"
+
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+            --output text)
+
+          sam deploy \
+            --stack-name "$STACK" \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides "ShortUrlBase=${API_URL}"
+
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "stack_name=$STACK" >> "$GITHUB_OUTPUT"
+
+      - name: Build static web for deploy
+        env:
+          NEXT_PUBLIC_API_URL: ${{ steps.deploy.outputs.api_url }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Sync web to S3 and invalidate CloudFront
+        run: |
+          STACK="${{ steps.deploy.outputs.stack_name }}"
+          BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='WebBucketName'].OutputValue" \
+            --output text)
+          DIST_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)
+
+          aws s3 sync apps/web/out "s3://${BUCKET}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "/*"
+
+      - name: Deployment summary
+        run: |
+          STACK="${{ steps.deploy.outputs.stack_name }}"
+          WEB_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue" \
+            --output text)
+          echo "### Deployed preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: ${{ steps.deploy.outputs.api_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Web: ${WEB_URL}" >> "$GITHUB_STEP_SUMMARY"

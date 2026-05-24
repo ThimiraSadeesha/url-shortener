@@ -1,0 +1,13 @@
+{
+  "name": "url-shortener",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @url-shortener/web",
+    "build": "npm run build -w @url-shortener/web",
+    "lint": "npm run lint -w @url-shortener/web",
+    "test": "npm run build && go test ./..."
+  }
+}

@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: URL shortener — API (Lambda + DynamoDB) and static web (S3 + CloudFront)
+
+Parameters:
+  ShortUrlBase:
+    Type: String
+    Description: Public base URL for short links (no trailing slash). Set after first deploy if using a custom domain.
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 256
+    Runtime: provided.al2023
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref UrlTable
+        AWS_REGION_NAME: !Ref AWS::Region
+
+Resources:
+  UrlTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: url-shortener
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: short_code
+          AttributeType: S
+      KeySchema:
+        - AttributeName: short_code
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+
+  CreateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: functions/create/
+      Handler: bootstrap
+      Environment:
+        Variables:
+          SHORT_URL_BASE: !Ref ShortUrlBase
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UrlTable
+      Events:
+        CreateApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/shorten
+            Method: POST
+
+  RedirectFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: functions/redirect/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UrlTable
+      Events:
+        RedirectApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{code}
+            Method: GET
+
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}"
+
+  WebOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-web-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: WebS3
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: WebS3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway HTTP API endpoint
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  WebUrl:
+    Description: CloudFront URL for the web UI
+    Value: !Sub "https://${WebDistribution.DomainName}"
+  WebBucketName:
+    Description: S3 bucket for static web assets
+    Value: !Ref WebBucket
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (for cache invalidation)
+    Value: !Ref WebDistribution
