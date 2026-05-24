@@ -39,32 +39,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# Dependencies
-node_modules/
-apps/web/node_modules/
-
-# Build outputs
-.next/
-out/
-dist/
-.aws-sam/
-
-# Go
-bootstrap
-*.exe
-
-# Env & secrets
-.env
-.env*.local
-samconfig.toml
-
-# IDE
-.idea/
-
-# OS
-.DS_Store
-
-# Logs
-*.log
-npm-debug.log*
